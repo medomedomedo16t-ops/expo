@@ -1,35 +1,97 @@
----
-title: Create a project
-description: Learn how to create a new Expo project.
-hideTOC: true
----
+async function chargeVodafone(receiverPhone, productId, walletPin) {
+  const headers = {
+    'User-Agent': 'okhttp/4.11.0',
+    'x-agent-operatingsystem': '13',
+    'clientId': 'AnaVodafoneAndroid',
+    'Accept-Language': 'ar',
+    'x-agent-device': 'OPPO CPH2235',
+    'x-agent-version': '2024.7.2.1',
+    'x-agent-build': '1050',
+    'digitalId': '24S0M31T0I9RK',
+  };
 
-import { Terminal } from '~/ui/components/Snippet';
+  // Step 1: seamless token
+  const authResp = await fetch(
+    'http://mobile.vodafone.com.eg/checkSeamless/realms/vf-realm/protocol/openid-connect/auth?client_id=ana-vodafone-app-seamless',
+    { headers }
+  );
+  const authData = await authResp.json();
+  const seamlessToken = authData.seamlessToken;
+  const msisdn = authData.msisdn;
 
-Expo is a React Native framework that makes developing Android and iOS apps easier. Our framework provides file-based routing, a standard library of native modules, and much more. Expo is open source with an active community on [GitHub](https://github.com/expo/expo) and [Discord](https://chat.expo.dev).
+  if (!seamlessToken) {
+    return { success: false, message: 'تأكد من اتصالك ببيانات فودافون' };
+  }
 
-We also make [Expo Application Services (EAS)](https://expo.dev/eas), a set of services that complement the Expo framework in each step of the development process.
+  // Step 2: access token
+  const tokenResp = await fetch(
+    'https://mobile.vodafone.com.eg/auth/realms/vf-realm/protocol/openid-connect/token',
+    {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Accept': 'application/json',
+        'silentLogin': 'true',
+        'seamlessToken': seamlessToken,
+        'firstTimeLogin': 'true',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: 'grant_type=password&client_secret=b86e30a8-ae29-467a-a71f-65c73f2ff5e3&client_id=cash-app',
+    }
+  );
+  const tokenData = await tokenResp.json();
+  const accessToken = tokenData.access_token;
 
-## System requirements
+  if (!accessToken) {
+    return { success: false, message: 'فشل المصادقة مع فودافون' };
+  }
 
-- [Node.js (LTS)](https://nodejs.org/en/).
-- macOS, Windows (Powershell and [WSL 2](https://expo.fyi/wsl)), and Linux are supported.
+  // Step 3: execute order
+  const orderResp = await fetch(
+    'https://mobile.vodafone.com.eg/services/dxl/pom/productOrder',
+    {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json; charset=UTF-8',
+        'api-host': 'ProductOrderingManagement',
+        'useCase': 'CashFakkaAndMared',
+        'api-version': 'v2',
+        'msisdn': `0${msisdn}`,
+        'Authorization': `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        channel: { name: 'MobileApp' },
+        orderItem: [{
+          action: 'insert',
+          id: productId,
+          product: {
+            characteristic: [
+              { name: 'PaymentMethod', value: 'VFCash' },
+              { name: 'USE_EMONEY', value: 'False' },
+              { name: 'MerchantCode', value: '81841829' },
+            ],
+            id: productId,
+            relatedParty: [
+              { id: String(msisdn), name: 'MSISDN', role: 'Subscriber' },
+              { id: receiverPhone, name: 'Receiver', role: 'Receiver' },
+            ],
+          },
+          '@type': productId,
+          eCode: 0,
+        }],
+        relatedParty: [{ id: walletPin, name: 'pin', role: 'Requestor' }],
+        '@type': 'CashFakkaAndMared',
+      }),
+    }
+  );
 
-We recommend starting with the default project created by `create-expo-app`. The default project includes example code to help you get started.
+  const result = await orderResp.json();
 
-To create a new project, run the following command:
-
-<Terminal
-  cmd={{
-    npm: ['$ npx create-expo-app@latest --template default@sdk-56'],
-    yarn: ['$ yarn create expo-app --template default@sdk-56'],
-    pnpm: ['$ pnpm create expo-app --template default@sdk-56'],
-    bun: ['$ bun create expo --template default@sdk-56'],
-  }}
-/>
-
-> **Note:** During the SDK 56 transition period, `create-expo-app@latest` without the `--template` flag creates an SDK 54 project. If you plan to use Expo Go on a physical device, use an SDK 54 project. Otherwise, use `--template default@sdk-56` to create an SDK 56 project. You can also choose a different template by adding the [`--template` option](/more/create-expo/#--template).
-
-## Next step
-
-You have a project. Now it's time to set up your development environment so that you can start developing.
+  if (result.orderTotalPrice !== undefined || result.state === 'Completed') {
+    return { success: true, message: 'تم الشحن بنجاح!' };
+  } else {
+    return { success: false, message: result.message || 'فشلت العملية' };
+  }
+}
